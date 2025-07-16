@@ -7,12 +7,38 @@ use crate::engine::ZBLS;
 use crate::Message;
 use crate::serialize::SerializableToBytes;
 
-// 定義錯誤碼
+// ===== 錯誤碼定義 =====
 pub const BLS_SUCCESS: c_int = 0;
 pub const BLS_ERROR_INVALID_INPUT: c_int = -1;
 pub const BLS_ERROR_SIGNATURE_VERIFICATION_FAILED: c_int = -2;
 pub const BLS_ERROR_MEMORY_ALLOCATION_FAILED: c_int = -3;
 pub const BLS_ERROR_MEMORY_DEALLOCATION_FAILED: c_int = -4;
+pub const BLS_ERROR_SERIALIZATION_FAILED: c_int = -5;
+pub const BLS_ERROR_DESERIALIZATION_FAILED: c_int = -6;
+pub const BLS_ERROR_INVALID_KEY_FORMAT: c_int = -7;
+pub const BLS_ERROR_INVALID_SIGNATURE_FORMAT: c_int = -8;
+pub const BLS_ERROR_INVALID_MESSAGE_FORMAT: c_int = -9;
+pub const BLS_ERROR_KEY_GENERATION_FAILED: c_int = -10;
+pub const BLS_ERROR_INTERNAL_ERROR: c_int = -99;
+
+// ===== 錯誤訊息 =====
+fn get_error_message(error_code: c_int) -> &'static str {
+    match error_code {
+        BLS_SUCCESS => "Success",
+        BLS_ERROR_INVALID_INPUT => "Invalid input parameter",
+        BLS_ERROR_SIGNATURE_VERIFICATION_FAILED => "Signature verification failed",
+        BLS_ERROR_MEMORY_ALLOCATION_FAILED => "Memory allocation failed",
+        BLS_ERROR_MEMORY_DEALLOCATION_FAILED => "Memory deallocation failed",
+        BLS_ERROR_SERIALIZATION_FAILED => "Serialization failed",
+        BLS_ERROR_DESERIALIZATION_FAILED => "Deserialization failed",
+        BLS_ERROR_INVALID_KEY_FORMAT => "Invalid key format",
+        BLS_ERROR_INVALID_SIGNATURE_FORMAT => "Invalid signature format",
+        BLS_ERROR_INVALID_MESSAGE_FORMAT => "Invalid message format",
+        BLS_ERROR_KEY_GENERATION_FAILED => "Key generation failed",
+        BLS_ERROR_INTERNAL_ERROR => "Internal error",
+        _ => "Unknown error",
+    }
+}
 
 // 定義結構體來包裝 Rust 類型
 #[repr(C)]
@@ -33,6 +59,38 @@ pub struct BLSSecretKey {
 #[repr(C)]
 pub struct BLSSignature {
     signature: Signature<ZBLS>,
+}
+
+// ===== 錯誤處理工具函數 =====
+
+// 獲取錯誤訊息
+#[no_mangle]
+pub extern "C" fn bls_get_error_message(error_code: c_int) -> *mut c_char {
+    let message = get_error_message(error_code);
+    match CString::new(message) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+// 檢查錯誤碼是否為成功
+#[no_mangle]
+pub extern "C" fn bls_is_success(error_code: c_int) -> c_int {
+    if error_code == BLS_SUCCESS {
+        1
+    } else {
+        0
+    }
+}
+
+// 檢查錯誤碼是否為錯誤
+#[no_mangle]
+pub extern "C" fn bls_is_error(error_code: c_int) -> c_int {
+    if error_code < 0 {
+        1
+    } else {
+        0
+    }
 }
 
 // ===== 基本功能測試 =====
@@ -73,6 +131,11 @@ pub extern "C" fn bls_sign(
     let msg_str = unsafe { CStr::from_ptr(message) };
     let msg_bytes = msg_str.to_bytes();
     
+    // 檢查是否包含 null 字元
+    if msg_bytes.contains(&0) {
+        return ptr::null_mut();
+    }
+    
     let message_obj = Message::new(b"", msg_bytes);
     
     use rand::thread_rng;
@@ -94,9 +157,12 @@ pub extern "C" fn bls_verify_signature(
     
     let sig = unsafe { &*signature };
     let pk = unsafe { &*public_key };
-    let msg_str = unsafe { CStr::from_ptr(message) };
+    let msg_str = match unsafe { CStr::from_ptr(message) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return BLS_ERROR_INVALID_MESSAGE_FORMAT,
+    };
     
-    let message_obj = Message::new(b"", msg_str.to_bytes());
+    let message_obj = Message::new(b"", msg_str.as_bytes());
     let is_valid = sig.signature.verify(&message_obj, &pk.public_key);
     
     if is_valid {
