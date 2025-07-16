@@ -1,13 +1,16 @@
 [package]
 authors = ["Jack Grigg <str4d@i2pmail.org>", "Jeff Burdges <burdges@gnunet.org>", "Syed Hosseini <syed@riseup.net>"]
-description = "Aggregate BLS-like signatures"
+description = "Aggregate BLS-like signatures with simplified Go FFI"
 documentation = "https://docs.rs/w3f-bls"
 homepage = "https://github.com/w3f/bls"
 license = "MIT/Apache-2.0"
-name = "w3f-bls"
+name = "w3f-bls-easy"
 repository = "https://github.com/w3f/bls"
 version = "0.1.9"
 edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
 
 [dependencies]
 arrayref = { version = "0.3", default-features = false }
@@ -27,6 +30,7 @@ ark-bls12-381 = { version = "0.4.0", default-features = false, features = [ "cur
 ark-bls12-377 = { version = "0.4.0", default-features = false, features = [ "curve" ] }
 
 zeroize = { version = "1.0", default-features = false, features = [ "zeroize_derive" ] }
+hex = "0.4"
 
 [dev-dependencies]
 hex-literal = "0.3.4"
@@ -35,3 +39,6 @@ hex-literal = "0.3.4"
 default = ["std"]
 std = ["rand/std"]
 experimental = []
+
+[profile.release]
+lto = true

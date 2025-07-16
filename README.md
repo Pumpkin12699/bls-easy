@@ -1,181 +1,237 @@
-# bls [![Crates.io](https://img.shields.io/crates/v/w3f-bls.svg)](https://crates.io/crates/w3f-bls) #
+# BLS Easy FFI
 
-Boneh-Lynn-Shacham (BLS) signatures have slow signing, very slow verification, require slow and much less secure pairing friendly curves, and tend towards dangerous malleability.  Yet, BLS permits a diverse array of signature aggregation options far beyond any other known signature scheme, which makes BLS a preferred scheme for voting in consensus algorithms and for threshold signatures. 
+這是 BLS 簽名庫的簡化版 Go FFI (Foreign Function Interface)，專注於核心 BLS 功能，讓 Go 程式可以輕鬆呼叫 Rust 實現的 BLS 簽名功能。
 
-In this crate, we take a largely unified approach to aggregation techniques and verifier optimisations for BLS signature:  We support the [BLS12-381](https://z.cash/blog/new-snark-curve.html) and [BLS12-377](https://eprint.iacr.org/2018/962.pdf) (Barreto-Lynn-Scott) curves via Arkworks traits, but abstract the pairing so that developers can choose their preferred orientation for BLS signatures. We provide aggregation techniques based on messages being distinct, on proofs-of-possession, and on delinearization, although we do not provide all known optimisations for delinearization.
+## 專案特色
 
-We provide implementation of generation and verification proof-of-possession based on Schnorr Signature which is faster than using BLS Signature itself for this task.
+- **簡化設計**: 只實作核心 BLS API，避免複雜性
+- **完整功能**: 涵蓋簽署、聚合、驗證等完整流程
+- **易於使用**: 提供清晰的 Go 介面
+- **記憶體安全**: 完整的記憶體管理機制
 
-We cannot claim these abstractions provide miss-use resistance, but they at least structure the problem, provide some guidlines, and maximize the relevance of warnings present in the documentation.
+## 專案結構
 
-## Documentation
-
-You first bring the `bls` crate into your project just as you normally would.
-
-```rust
-use w3f_bls::{Keypair,ZBLS,Message,Signed};
-
-let mut keypair = Keypair::<ZBLS>::generate(::rand::thread_rng());
-let message = Message::new(b"Some context",b"Some message");
-let sig = keypair.sign(&message);
-assert!( sig.verify(&message,&keypair.public) );
+```
+bls_easy/
+├── src/                    # Rust 原始碼
+│   ├── lib.rs             # 主要庫檔案
+│   ├── ffi.rs             # 簡化版 FFI 介面
+│   └── ...                # 其他 Rust 模組
+├── main.go                # Go 測試程式
+├── Cargo.toml             # Rust 依賴配置
+├── cbindgen.toml          # C 標頭檔生成配置
+├── go.mod                 # Go 模組配置
+├── Makefile               # 編譯腳本
+└── README.md              # 本檔案
 ```
 
-In this example, `sig` is a `Signature<ZBLS>` which only contains signature. One can use `Keypair::signed_message` method which returns a `SignedMessage` struct that contains the message hash, the signer's public key, and of course the signature, but one should usually detach these constituents for wire formats.
+## 核心功能
 
-Aggregated and blind signatures are almost the only reasons anyone would consider using BLS signatures, so we focus on aggregation here.  We assume for brevity that `sigs` is an array of `SignedMessage`s, as one might construct like 
+### 簽署者端 (Signer Side)
 
-As a rule, aggregation that requires distinct messages still requires one miller loop step per message, so aggregate signatures have rather slow verification times.  You can nevertheless achieve quite small signature sizes like
+1. **產生私鑰**: `bls_generate_secret_key()`
+2. **匯出公鑰**: `bls_get_public_key(secret_key)`
+3. **產生持有證明**: `bls_generate_pok(secret_key)`
+4. **簽署訊息**: `bls_sign(secret_key, message, context)`
 
-```rust
-#[cfg(feature = "experimental")]
-use w3f_bls::{distinct::DistinctMessages, Keypair, Message, Signed, ZBLS};
+### 聚合者端 (Aggregator Side)
 
-#[cfg(feature = "experimental")]
-{
-	let mut keypairs = [
-		Keypair::<ZBLS>::generate(::rand::thread_rng()),
-		Keypair::<ZBLS>::generate(::rand::thread_rng()),
-	];
-	let msgs = [
-		"The ships",
-		"hung in the sky",
-		"in much the same way",
-		"that bricks don’t.",
-	]
-	.iter()
-	.map(|m| Message::new(b"Some context", m.as_bytes()))
-	.collect::<Vec<_>>();
-	let sigs = msgs
-		.iter()
-		.zip(keypairs.iter_mut())
-		.map(|(m, k)| k.signed_message(m))
-		.collect::<Vec<_>>();
+1. **驗證持有證明**: `bls_verify_pok(proof, public_key)`
+2. **聚合簽章**: `bls_aggregate_signatures(signatures, count)`
+3. **聚合公鑰**: `bls_aggregate_public_keys(public_keys, count)`
 
-		let dms = sigs
-		.iter()
-		.try_fold(DistinctMessages::<ZBLS>::new(), |dm, sig| dm.add(sig))
-		.unwrap();
-	let signature = <&DistinctMessages<ZBLS> as Signed>::signature(&&dms);
+### 驗證者端 (Verifier Side)
 
-		let publickeys = keypairs.iter().map(|k| k.public).collect::<Vec<_>>();
-	let mut dms = msgs
-		.into_iter()
-		.zip(publickeys)
-		.try_fold(
-			DistinctMessages::<ZBLS>::new(),
-			|dm, (message, publickey)| dm.add_message_n_publickey(message, publickey),
-		)
-		.unwrap();
-	dms.add_signature(&signature);
-	assert!(dms.verify())
+1. **驗證聚合簽章 (不同訊息)**: `bls_verify_aggregated_signature(signature, messages, public_keys, count)`
+2. **驗證聚合簽章 (相同訊息)**: `bls_verify_aggregated_signature_same_message(signature, message, public_key)`
+
+### 序列化功能
+
+- **序列化**: `bls_*_to_string()` 系列函數
+- **反序列化**: `bls_*_from_string()` 系列函數
+- **記憶體管理**: `bls_free_*()` 系列函數
+
+## 安裝和編譯
+
+### 前置需求
+
+- Rust (1.70+)
+- Go (1.21+)
+- cbindgen
+
+### 安裝 cbindgen
+
+```bash
+cargo install --force cbindgen
+```
+
+### 編譯和測試
+
+```bash
+# 完整設置 (安裝 cbindgen + 編譯 + 測試)
+make setup
+
+# 或者分步驟執行
+make install-cbindgen  # 安裝 cbindgen
+make build            # 編譯 Rust 庫
+make test             # 執行 Go 測試
+```
+
+## API 使用範例
+
+### Go 程式範例
+
+```go
+package main
+
+// #cgo LDFLAGS: -L./target/release -lw3f_bls_easy
+// #include <stdlib.h>
+// #include "./src/bls_easy_ffi.h"
+import "C"
+import (
+    "fmt"
+    "unsafe"
+)
+
+func main() {
+    // 1. 產生私鑰
+    secretKey := C.bls_generate_secret_key()
+    defer C.bls_free_secret_key(secretKey)
+
+    // 2. 匯出公鑰
+    publicKey := C.bls_get_public_key(secretKey)
+    defer C.bls_free_public_key(publicKey)
+
+    // 3. 產生持有證明
+    proof := C.bls_generate_pok(secretKey)
+    defer C.bls_free_schnorr_proof(proof)
+
+    // 4. 簽署訊息
+    message := "Hello, BLS Easy!"
+    cMessage := C.CString(message)
+    defer C.free(unsafe.Pointer(cMessage))
+    
+    signature := C.bls_sign(secretKey, cMessage, nil)
+    defer C.bls_free_signature(signature)
+
+    // 5. 驗證持有證明
+    result := C.bls_verify_pok(proof, publicKey)
+    if result == C.BLS_SUCCESS {
+        fmt.Println("Proof of possession verified!")
+    }
+
+    // 6. 聚合簽章
+    signatures := [2]*C.BLSSignature{signature, signature}
+    aggregatedSig := C.bls_aggregate_signatures(&signatures[0], 2)
+    defer C.bls_free_signature(aggregatedSig)
+
+    // 7. 驗證聚合簽章
+    result2 := C.bls_verify_aggregated_signature_same_message(aggregatedSig, cMessage, publicKey)
+    if result2 == C.BLS_SUCCESS {
+        fmt.Println("Aggregated signature verified!")
+    }
 }
 ```
-Anyone who receives the already aggregated signature along with a list of messages and public keys might reconstruct the signature as shown in the above example.
 
-We recommend distinct message aggregation like this primarily for verifying proofs-of-possession, meaning checking the self certificates for numerous keys.
+## FFI 函數列表
 
-Assuming you already have proofs-of-possession, then you'll want to do aggregation with `BitPoPSignedMessage` or some variant tuned to your use case.  We recommend more care when using `SignatureAggregatorAssumingPoP` because it provides no mechanism for checking a proof-of-possession table.
+### 簽署者端函數
 
-The library offers method for generating and verifying proof of positions both based on BLS and [Schnorr Signature](https://en.wikipedia.org/wiki/Schnorr_signature) which is faster to verify than when using BLS signature itself as proof of position. The following example demonstrate how to generate and verify proof of positions and then using `SignatureAggregatorAssumingPoP` to batch and verify multiple BLS signatures.
+- `bls_generate_secret_key()` - 產生新的私鑰
+- `bls_get_public_key(secret_key)` - 從私鑰獲取公鑰
+- `bls_generate_pok(secret_key)` - 產生持有證明
+- `bls_sign(secret_key, message, context)` - 簽名訊息
 
-```rust
-use w3f_bls::{Keypair,PublicKey,ZBLS,Message,Signed, ProofOfPossessionGenerator, ProofOfPossession, schnorr_pop::{SchnorrPoP}, multi_pop_aggregator::MultiMessageSignatureAggregatorAssumingPoP};
-use sha2::Sha256;
+### 聚合者端函數
 
-let mut keypairs = [Keypair::<ZBLS>::generate(::rand::thread_rng()), Keypair::<ZBLS>::generate(::rand::thread_rng())];
-let msgs = ["The ships", "hung in the sky", "in much the same way", "that bricks don’t."].iter().map(|m| Message::new(b"Some context", m.as_bytes())).collect::<Vec<_>>();
-let sigs = msgs.iter().zip(keypairs.iter_mut()).map(|(m,k)| k.sign(m)).collect::<Vec<_>>();
+- `bls_verify_pok(proof, public_key)` - 驗證持有證明
+- `bls_aggregate_signatures(signatures, count)` - 聚合簽章
+- `bls_aggregate_public_keys(public_keys, count)` - 聚合公鑰
 
-let publickeys = keypairs.iter().map(|k|k.public.clone()).collect::<Vec<_>>();
-let pops = keypairs.iter_mut().map(|k|(ProofOfPossessionGenerator::<ZBLS, Sha256, PublicKey<ZBLS>, SchnorrPoP<ZBLS>>::generate_pok(k))).collect::<Vec<_>>();
+### 驗證者端函數
 
-//first make sure public keys have valid pop
-let publickeys = publickeys.iter().zip(pops.iter()).map(|(publickey, pop) | {assert!(ProofOfPossession::<ZBLS, Sha256, PublicKey<ZBLS>>::verify(pop,publickey)); publickey}).collect::<Vec<_>>();
+- `bls_verify_aggregated_signature(signature, messages, public_keys, count)` - 驗證聚合簽章 (不同訊息)
+- `bls_verify_aggregated_signature_same_message(signature, message, public_key)` - 驗證聚合簽章 (相同訊息)
 
-let batch_poped = msgs.iter().zip(publickeys).zip(sigs).fold(
-    MultiMessageSignatureAggregatorAssumingPoP::<ZBLS>::new(),
-    |mut bpop,((message, publickey),sig)| { bpop.add_message_n_publickey(message, &publickey); bpop.add_signature(&sig); bpop }
-);
-assert!(batch_poped.verify())
+### 序列化函數
+
+- `bls_public_key_to_string(public_key)` - 序列化公鑰為字串
+- `bls_secret_key_to_string(secret_key)` - 序列化私鑰為字串
+- `bls_signature_to_string(signature)` - 序列化簽名為字串
+- `bls_public_key_from_string(hex_string)` - 從字串反序列化公鑰
+- `bls_secret_key_from_string(hex_string)` - 從字串反序列化私鑰
+- `bls_signature_from_string(hex_string)` - 從字串反序列化簽名
+
+### 記憶體管理函數
+
+- `bls_free_secret_key(secret_key)` - 釋放私鑰記憶體
+- `bls_free_public_key(public_key)` - 釋放公鑰記憶體
+- `bls_free_signature(signature)` - 釋放簽名記憶體
+- `bls_free_schnorr_proof(proof)` - 釋放持有證明記憶體
+- `bls_free_string(string)` - 釋放字串記憶體
+
+## 錯誤碼
+
+- `BLS_SUCCESS` (0) - 操作成功
+- `BLS_ERROR_INVALID_INPUT` (-1) - 無效輸入
+- `BLS_ERROR_SIGNATURE_VERIFICATION_FAILED` (-2) - 簽名驗證失敗
+- `BLS_ERROR_MEMORY_ALLOCATION_FAILED` (-3) - 記憶體分配失敗
+
+## 與完整版的差異
+
+### 簡化設計
+- 移除了複雜的金鑰對管理
+- 專注於核心 BLS 功能
+- 簡化的 API 設計
+
+### 功能對比
+
+| 功能 | 完整版 (bls-go) | 簡化版 (bls_easy) |
+|------|------------------|-------------------|
+| 金鑰對生成 | ✓ | ✓ |
+| 簽名/驗證 | ✓ | ✓ |
+| 聚合功能 | ✓ | ✓ |
+| 持有證明 | ✓ | ✓ |
+| 序列化 | ✓ | ✓ |
+| 金鑰對管理 | 複雜 | 簡化 |
+| 多種曲線支援 | ✓ | 僅 BLS12-381 |
+| 進階聚合 | ✓ | 基本聚合 |
+
+## 使用場景
+
+### 適合使用 bls_easy 的場景
+- 需要快速整合 BLS 功能
+- 只需要基本的簽名和聚合功能
+- 希望簡化的 API 設計
+- 主要使用 BLS12-381 曲線
+
+### 適合使用完整版的場景
+- 需要多種曲線支援
+- 需要進階的聚合功能
+- 需要完整的金鑰管理
+- 需要更細緻的控制
+
+## 注意事項
+
+1. **記憶體管理**: 所有 FFI 函數都需要正確的記憶體管理，使用 `defer` 來確保資源被釋放
+2. **字串處理**: 字串參數需要使用 `C.CString()` 轉換，並在完成後釋放
+3. **空指針檢查**: 返回的指針可能為 `nil`，使用前需要檢查
+4. **序列化格式**: 序列化的資料使用十六進制字串格式
+5. **聚合限制**: 聚合功能需要相同數量的簽名和公鑰
+
+## 清理
+
+```bash
+make clean
 ```
 
-If you lack proofs-of-possesion, then delinearized approaches are provided in the `delinear` module, but such schemes might require a more customised approach. However, note that currently only aggeration assuming proof of possession is maintained and the other strategies are experimental. 
+這會清理編譯產生的檔案和生成的標頭檔。
 
-### Efficient Aggregatable BLS Signatures with Chaum-Pedersen Proofs
+## 貢獻
 
-The scheme introduced in [`our recent paper`](https://eprint.iacr.org/2022/1611) is implemented in [`chaum_pederson_signature.rs`](src/chaum_pederson_signature.rs) using `ChaumPedersonSigner` and `ChaumPedersonVerifier` traits and in [`pop.rs`](src/pop.rs) using `add_auxiliary_public_key` and `verify_using_aggregated_auxiliary_public_keys` functions which is demonestrated in the following example:
-```rust
-use sha2::Sha256;
-use ark_bls12_377::Bls12_377;
-use ark_ff::Zero;
-use rand::thread_rng;
+歡迎提交 Issue 和 Pull Request 來改善這個專案！
 
-use w3f_bls::{
-    single_pop_aggregator::SignatureAggregatorAssumingPoP, DoublePublicKeyScheme, EngineBLS, Keypair, Message, PublicKey, PublicKeyInSignatureGroup, Signed, TinyBLS, TinyBLS377,
-};
+## 授權
 
-
-let message = Message::new(b"ctx", b"I'd far rather be happy than right any day.");
-let mut keypairs: Vec<_> = (0..3)
-    .into_iter()
-    .map(|_| Keypair::<TinyBLS<Bls12_377, ark_bls12_377::Config>>::generate(thread_rng()))
-    .collect();
-let pub_keys_in_sig_grp: Vec<PublicKeyInSignatureGroup<TinyBLS377>> = keypairs
-    .iter()
-    .map(|k| k.into_public_key_in_signature_group())
-    .collect();
-
-let mut prover_aggregator =
-    SignatureAggregatorAssumingPoP::<TinyBLS377>::new(message.clone());
-let mut aggregated_public_key =
-    PublicKey::<TinyBLS377>(<TinyBLS377 as EngineBLS>::PublicKeyGroup::zero());
-
-//sign and aggegate
-let _ = keypairs
-    .iter_mut()
-    .map(|k| {
-        prover_aggregator.add_signature(&k.sign(&message));
-        aggregated_public_key.0 += k.public.0;
-    })
-    .count();
-
-let mut verifier_aggregator = SignatureAggregatorAssumingPoP::<TinyBLS377>::new(message);
-
-verifier_aggregator.add_signature(&(&prover_aggregator).signature());
-
-//aggregate public keys in signature group
-verifier_aggregator.add_publickey(&aggregated_public_key);
-
-pub_keys_in_sig_grp.iter().for_each(|pk| {verifier_aggregator.add_auxiliary_public_key(pk);});
-
-assert!(
-    verifier_aggregator.verify_using_aggregated_auxiliary_public_keys::<Sha256>(),
-    "verifying with honest auxilary public key should pass"
-);
-```
-
-### Hash to Curve
-
-In order to sign a message, the library needs to hash the message as a point on the signature curve. While `BLSEngine` trait is agnostic about `MapToSignatureCurve` method, our implementation of BLS12-381 (`ZBLS`) and BLS12-377(`BLS377`) specifically uses Wahby and Boneh hash to curve method described in Section of 6.6.3 of https://datatracker.ietf.org/doc/draft-irtf-cfrg-hash-to-curve/.
-
-## Security Warnings
-
-This library does not make any guarantees about constant-time operations, memory access patterns, or resistance to side-channel attacks.
-
-## License
-
-Licensed under either of
-
- * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
- * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally
-submitted for inclusion in the work by you, as defined in the Apache-2.0
-license, shall be dual licensed as above, without any additional terms or
-conditions.
+本專案採用 MIT/Apache-2.0 雙重授權。
 

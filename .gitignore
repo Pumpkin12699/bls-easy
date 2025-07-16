@@ -1,3 +1,25 @@
+# Rust
 /target/
-**/*.rs.bk
 Cargo.lock
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated files
+src/bls_easy_ffi.h

@@ -106,6 +106,7 @@ pub mod chaum_pedersen_signature;
 pub mod double;
 pub mod double_pop;
 pub mod engine;
+pub mod ffi;
 pub mod schnorr_pop;
 pub mod serialize;
 pub mod single;
